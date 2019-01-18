@@ -1,6 +1,7 @@
 #include <fstream>
 #include <string>
 
+#include "graph.h"
 #include "DeltaSteppingSeq.h"
 
 int main()
@@ -11,11 +12,8 @@ int main()
     Graph g = g.readFromGR(fileName);
 
     // 1 source
-    const int source = 0;
-    const int delta  = 5000;
-
-    DeltaStepping::Dist * dists =
-    DeltaStepping::runDeltaStep(g,source,delta);
+    DeltaStepping deltaStepper(g, 3000);
+    std::vector<DeltaStepping::Dist> dists = deltaStepper.run(0);
 
     FILE *gFile;
 	gFile = fopen("../graphs/ny_1.res", "r");

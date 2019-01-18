@@ -56,26 +56,7 @@ Graph::getMaxEdgeWeight() const
     }
 
     return maximalEdge;
-}
-
-int
-Graph::getMaxDegree() const
-{
-	
-	std::cout<<"ENTERS NEW!!!!!!!!"<<std::endl;
-	int maxDegree = 0;
-	int currDegree = 0;
-	
-    for (int i = 1; i < numberOfNodes; ++i)
-    {
-		currDegree = numberOfNeighbours[i] - numberOfNeighbours[i-1];
-		
-		if(maxDegree < currDegree){
-			maxDegree = currDegree;
-		}
-    }
-    return maxDegree;
-}
+};
 
 /* todo: fix
 Graph

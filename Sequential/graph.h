@@ -69,9 +69,6 @@ class Graph
 
 	int
 	getMaxEdgeWeight() const;
-	
-	int
-	getMaxDegree() const;
 
 	private:
 		//std::vector<std::vector<Edge>> _adjacency;
@@ -79,8 +76,8 @@ class Graph
 		long numberOfNodes;
 		long numberOfArcs;
 
-		int * numberOfNeighbours;
 		Edge * _adjacency; // metis format
+		int * numberOfNeighbours;
 };
 
 #endif
