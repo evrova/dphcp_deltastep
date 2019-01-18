@@ -11,7 +11,7 @@ To run the benchmarks:
 
 - compile the code with `make`
 - compile the code in the `gapbs_modified` directory with `make`
-- run the `runRo.sh`, `runKr`, `runUr` or `runTw` scripts for the desired graph in the `gapbs_modified` directory or setup the `benh.mk` file in `gapbs_modified/benchmark` directory and run the command `make bench-run`.
+- run the `runRo.sh`, `runKr.sh`, `runUr.sh` or `runTw.sh` scripts for the desired graph in the `gapbs_modified` directory or setup the `benh.mk` file in `gapbs_modified/benchmark` directory and run the command `make bench-run`.
 
 To run the shared bucket version, switch to the sharedBucketsVersion branch.
 
