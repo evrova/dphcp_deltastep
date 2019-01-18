@@ -129,19 +129,13 @@ DeltaStepping::runDeltaStep(const Graph &graph, DeltaStepping::Node source, cons
 	Edge * _adjacancy 			= graph.getAdjecencyPtr();
 	NodeOffset * numberOfNeigbours = graph.getNeighbourPtr();
 	Dist maxEdgeWeight 			= graph.getMaxEdgeWeight();
-	const Dist thisDelta		= delta;
+	Dist thisDelta				= delta;
 
 	// setup tenative distances:
 	Dist * tent_dists = new Dist[num_nodes];
 	#pragma omp parallel for schedule(static)
 	for (int i = 0; i < num_nodes; ++i){
 		tent_dists[i] = std::numeric_limits<int>::max();
-	}
-
-	bool * visitedNodesFlags = new bool[num_nodes];
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < num_nodes; ++i){
-		visitedNodesFlags[i] = false;
 	}
 
 	int numThreads;
@@ -179,22 +173,30 @@ DeltaStepping::runDeltaStep(const Graph &graph, DeltaStepping::Node source, cons
 	//Bucket currentBucket; // called removed nodes in the paper
 
 	//std::cout << "number of buckets: " << numberOfBuckets <<std::endl;
+	
+	const int bucketStride = 64;
+	BucketSet * sharedBuckets = new BucketSet [(numThreads-1)*bucketStride+1];	
+	
+	
 
 	bool currentBucketIsEmpty = false;
 
 	#pragma omp parallel firstprivate(numberOfBuckets, _adjacancy, numberOfNeigbours, tent_dists, thisDelta, owners, rqStride)
 	{
 		const int ti = omp_get_thread_num();
+		const int bi = ti * bucketStride;
 		const int localNumThreads = numThreads;
+		
+		sharedBuckets[bi].resize(numberOfBuckets);
 
-		BucketSet buckets(numberOfBuckets);
-		Bucket visitedNodes;
+		//BucketSet buckets(numberOfBuckets);
 
 		RequestQueue ** requestQueue = new RequestQueue * [localNumThreads];
 		//copying from strided requests to local requestQueue
 		for (int i=0; i<localNumThreads; ++i){
 			requestQueue[i] = sharedRequestQueue[i*rqStride];
 		}
+		
 
 		for (int i=0; i<localNumThreads; ++i){
 			requestQueue[ti][i*rqStride].reserve(1024);
@@ -202,11 +204,11 @@ DeltaStepping::runDeltaStep(const Graph &graph, DeltaStepping::Node source, cons
 
 		// setup initial conditions
 		if (owners[source] == ti){
-			relax(source,0,tent_dists,buckets,thisDelta,numberOfBuckets); // set 0 dist to source
+			relax(source,0,tent_dists, sharedBuckets[bi],thisDelta,numberOfBuckets); // set 0 dist to source
 		}
 
 		int smallest_nonempty_bucket =
-		find_smallest_nonempty_bucket(numberOfBuckets,buckets,0,sharedReductionVariable);
+		find_smallest_nonempty_bucket(numberOfBuckets,sharedBuckets[bi],0,sharedReductionVariable);
 
 		int num_phase = 1;
 		
@@ -217,57 +219,54 @@ DeltaStepping::runDeltaStep(const Graph &graph, DeltaStepping::Node source, cons
 					//std::cout<<"---------------------------------PHASE "<<num_phase<<"---------------------------------"<<std::endl;
 					// empty the previous content of currentBucket and replace with 
 
-					// find requests out of own currrOfBuckets+1ent bucket
-					const uint currentBucketSize = buckets[smallest_nonempty_bucket].size();
-					for(uint i = 0; i < currentBucketSize; ++i){
-
-						const Node curr_node = buckets[smallest_nonempty_bucket][i];
-
-						if (i != currentBucketSize-1)
-						{
-							const Node nn = buckets[smallest_nonempty_bucket][i+1];
-							__builtin_prefetch (&tent_dists[nn], 0, 2);
-							__builtin_prefetch (&numberOfNeigbours[nn], 0, 2);
-						}
+					
+					for(uint b = 0; b < numThreads; ++b){
 						
-						const Graph::Weight curr_dist = tent_dists[curr_node];
+						const int curr_bi = b*bucketStride;
+						
+						// find requests out of own currrOfBuckets+1ent bucket
+						const uint currentBucketSize = sharedBuckets[curr_bi][smallest_nonempty_bucket].size();
+						
+						#pragma omp for nowait schedule(guided,32)
+						for(uint i = 0; i < currentBucketSize; ++i){
+	
+							const Node curr_node = sharedBuckets[curr_bi][smallest_nonempty_bucket][i];
 
-						const NodeOffset startAdj = numberOfNeigbours[curr_node];
-						const NodeOffset endAdj   = numberOfNeigbours[curr_node+1];
-
-						for(NodeOffset j = startAdj; j < endAdj; ++j){
-							const Node requestNode = _adjacancy[j].first;
-							const Graph::Weight requestWeight = _adjacancy[j].second;
-
-							if (j < endAdj-2)
+							if (i != currentBucketSize-1)
 							{
-								__builtin_prefetch (&owners[_adjacancy[j+2].first], 0, 1);
-							}
-
-							if (requestWeight < delta)
-							{
-								const int requestOwner = owners[requestNode];
-								requestQueue[ti][ requestOwner*rqStride ].emplace_back(requestNode, curr_dist+requestWeight);
+								const Node nn = sharedBuckets[curr_bi][smallest_nonempty_bucket][i+1];
+								__builtin_prefetch (&tent_dists[nn], 0, 2);
+								__builtin_prefetch (&numberOfNeigbours[nn], 0, 2);
 							}
 							
-						}// end of neighboring nodes traversal
+							const Graph::Weight curr_dist = tent_dists[curr_node];
 
-						if (!visitedNodesFlags[curr_node])
-						{
-							visitedNodesFlags[curr_node] = true;
-							visitedNodes.push_back(curr_node);
-						}
+							const NodeOffset startAdj = numberOfNeigbours[curr_node];
+							const NodeOffset endAdj   = numberOfNeigbours[curr_node+1];
 
-					}// end of bucket traversal
-					buckets[smallest_nonempty_bucket].clear();
+							for(NodeOffset j = startAdj; j < endAdj; ++j){
+								const Node requestNode = _adjacancy[j].first;
+								const Graph::Weight requestWeight = _adjacancy[j].second;
+								const int requestOwner = owners[requestNode];
 
+								if (j < endAdj-2)
+								{
+									__builtin_prefetch (&owners[_adjacancy[j+2].first], 0, 1);
+								}
+
+								requestQueue[ti][ requestOwner*rqStride ].emplace_back(requestNode, curr_dist+requestWeight);
+							}// end of neighboring nodes traversal
+						}// end of bucket traversal
+					}
+					
 					#pragma omp barrier
+					sharedBuckets[bi][smallest_nonempty_bucket].clear();
 					
 					// relax requests
 					for (int i=0; i<localNumThreads; ++i){
 						const auto endIt = requestQueue[i][ti*rqStride].end();
 						for(auto it = requestQueue[i][ti*rqStride].begin(); it != endIt; ++it){
-							relax(it->first, it->second, tent_dists, buckets, thisDelta, numberOfBuckets);
+							relax(it->first, it->second, tent_dists, sharedBuckets[bi], thisDelta, numberOfBuckets);
 						}
 						requestQueue[i][ti*rqStride].clear();
 					}
@@ -276,62 +275,15 @@ DeltaStepping::runDeltaStep(const Graph &graph, DeltaStepping::Node source, cons
 					currentBucketIsEmpty = true;
 
 					#pragma omp critical
-					currentBucketIsEmpty = currentBucketIsEmpty && buckets[smallest_nonempty_bucket].empty();
+					currentBucketIsEmpty = currentBucketIsEmpty && sharedBuckets[bi][smallest_nonempty_bucket].empty();
 
 					num_phase++;					
 					#pragma omp barrier
 				}// end inner while loop
-
-			// process heavy edges
-			const uint visitedNodesSize = visitedNodes.size();
-			for(uint i = 0; i < visitedNodesSize; ++i){
-				const Node curr_node = visitedNodes[i];
-
-				if (i != visitedNodesSize-1)
-				{
-					const Node nn = visitedNodes[i+1];
-					__builtin_prefetch (&tent_dists[nn], 0, 2);
-					__builtin_prefetch (&numberOfNeigbours[nn], 0, 2);
-				}
-				
-				const Graph::Weight curr_dist = tent_dists[curr_node];
-				const NodeOffset startAdj = numberOfNeigbours[curr_node];
-				const NodeOffset endAdj   = numberOfNeigbours[curr_node+1];
-
-				for(NodeOffset j = startAdj; j < endAdj; ++j){
-					const Node requestNode = _adjacancy[j].first;
-					const Graph::Weight requestWeight = _adjacancy[j].second;
-
-					if (j < endAdj-2)
-					{
-						__builtin_prefetch (&owners[_adjacancy[j+2].first], 0, 1);
-					}
-
-					if (requestWeight >= delta)
-					{
-						const int requestOwner = owners[requestNode];
-						requestQueue[ti][ requestOwner*rqStride ].emplace_back(requestNode, curr_dist+requestWeight);
-					}	
-				}// end of neighboring nodes traversal
-			}// end of bucket traversal
-			buckets[smallest_nonempty_bucket].clear();
-
-			#pragma omp barrier
-			
-			// relax requests
-			for (int i=0; i<localNumThreads; ++i){
-				const auto endIt = requestQueue[i][ti*rqStride].end();
-				for(auto it = requestQueue[i][ti*rqStride].begin(); it != endIt; ++it){
-					relax(it->first, it->second, tent_dists, buckets, thisDelta, numberOfBuckets);
-				}
-				requestQueue[i][ti*rqStride].clear();
-			}
-
-			visitedNodes.clear();
 			
 
 			smallest_nonempty_bucket =
-			find_smallest_nonempty_bucket(numberOfBuckets,buckets,smallest_nonempty_bucket,sharedReductionVariable);
+			find_smallest_nonempty_bucket(numberOfBuckets,sharedBuckets[bi],smallest_nonempty_bucket,sharedReductionVariable);
 
 			#pragma omp single
 			currentBucketIsEmpty = false;
