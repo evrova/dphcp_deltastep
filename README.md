@@ -15,4 +15,4 @@ To run the benchmarks:
 
 To run the shared bucket version, switch to the sharedBucketsVersion branch.
 
-The project group consists of: Erik Träff, Clara Brimnes Gardner, Andrey Oblupinand Gabriela Evrova. 
+The project group consists of: Erik Träff, Clara Brimnes Gardner, Andrey Oblupin and Gabriela Evrova. 
